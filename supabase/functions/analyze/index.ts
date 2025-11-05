@@ -41,19 +41,25 @@ serve(async (req) => {
 
     // Perform analysis
     const textLower = text.toLowerCase();
+    const wordCount = text.split(/\s+/).length;
+    
     let score = 100;
     let sensationalCount = 0;
     let biasedCount = 0;
     let sourceCount = 0;
+    let foundIssues: string[] = [];
 
     keywords.forEach((keyword: any) => {
       const termLower = keyword.term.toLowerCase();
-      const regex = new RegExp(`\\b${termLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
-      const matches = textLower.match(regex);
+      // Handle special characters and multi-word terms
+      const escapedTerm = termLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(escapedTerm, 'gi');
+      const matches = text.match(regex);
       
       if (matches) {
         const count = matches.length;
         score -= keyword.weight * count;
+        foundIssues.push(`"${keyword.term}" (${count}x)`);
         
         if (keyword.type === 'sensational') sensationalCount += count;
         else if (keyword.type === 'biased') biasedCount += count;
@@ -61,13 +67,33 @@ serve(async (req) => {
       }
     });
 
-    // Ensure score doesn't go below 0
-    score = Math.max(0, score);
+    // Additional heuristics for better scoring
+    const hasAllCaps = /[A-Z]{4,}/.test(text);
+    const excessivePunctuation = (text.match(/[!?]{2,}/g) || []).length;
+    const hasClickbait = /you won't believe|what happened next|this will shock you/i.test(textLower);
+    
+    if (hasAllCaps) {
+      score -= 5;
+      foundIssues.push('Excessive capitalization');
+    }
+    if (excessivePunctuation > 0) {
+      score -= excessivePunctuation * 3;
+      foundIssues.push('Excessive punctuation');
+    }
+    if (hasClickbait) {
+      score -= 15;
+      foundIssues.push('Clickbait phrases');
+    }
+
+    // Ensure score stays within bounds
+    score = Math.max(0, Math.min(100, score));
 
     // Determine flag levels
     const sensationalism = sensationalCount >= 3 ? "High" : sensationalCount >= 1 ? "Medium" : "Low";
-    const biasedLanguage = biasedCount >= 1 ? "Detected" : "Not Detected";
-    const sourceVerification = sourceCount >= 1 ? "Unverified Claims Found" : "Appears Sourced";
+    const biasedLanguage = biasedCount >= 2 ? "High" : biasedCount >= 1 ? "Medium" : "Low";
+    const sourceVerification = sourceCount >= 2 ? "Multiple Unverified Claims" : sourceCount >= 1 ? "Unverified Claims Found" : "Appears Sourced";
+
+    console.log('Analysis:', { score, sensationalCount, biasedCount, sourceCount, wordCount, foundIssues });
 
     const result = {
       trustScore: score,

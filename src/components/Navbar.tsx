@@ -73,7 +73,12 @@ const Navbar = () => {
                 </Link>
               </>
             )}
-            <Button className="gradient-hero">Add to Browser (Free)</Button>
+            <Button 
+              className="gradient-hero" 
+              onClick={() => window.open('https://chrome.google.com/webstore', '_blank')}
+            >
+              Add to Browser (Free)
+            </Button>
           </div>
 
           {/* Mobile Menu Toggle */}
@@ -120,7 +125,12 @@ const Navbar = () => {
                 </Link>
               </>
             )}
-            <Button className="gradient-hero w-full">Add to Browser (Free)</Button>
+            <Button 
+              className="gradient-hero w-full"
+              onClick={() => window.open('https://chrome.google.com/webstore', '_blank')}
+            >
+              Add to Browser (Free)
+            </Button>
           </div>
         )}
       </div>
