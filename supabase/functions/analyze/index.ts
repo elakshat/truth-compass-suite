@@ -14,19 +14,36 @@ serve(async (req) => {
   try {
     const { text } = await req.json();
 
-    if (!text || text.trim().length === 0) {
+    if (!text || typeof text !== 'string' || text.trim().length === 0) {
       return new Response(
-        JSON.stringify({ error: "Text is required for analysis" }),
+        JSON.stringify({ error: "Valid text is required for analysis" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Initialize Supabase client
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    // Validate text length
+    if (text.length > 50000) {
+      return new Response(
+        JSON.stringify({ error: "Text is too long (max 50,000 characters)" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Initialize Supabase client with validation
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    
+    if (!supabaseUrl || !supabaseKey) {
+      console.error('Missing Supabase environment variables');
+      return new Response(
+        JSON.stringify({ error: "Server configuration error" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Fetch all keywords from the database
+    // Fetch all keywords from the database with error handling
     const { data: keywords, error: keywordsError } = await supabase
       .from('keywords')
       .select('*');
@@ -34,9 +51,14 @@ serve(async (req) => {
     if (keywordsError) {
       console.error('Error fetching keywords:', keywordsError);
       return new Response(
-        JSON.stringify({ error: "Failed to fetch keywords" }),
+        JSON.stringify({ error: "Failed to fetch keywords from database" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
+    }
+
+    if (!keywords || keywords.length === 0) {
+      console.warn('No keywords found in database');
+      // Continue with heuristic analysis only
     }
 
     // Perform analysis with improved keyword matching
@@ -52,46 +74,66 @@ serve(async (req) => {
     console.log('Analyzing text:', text.substring(0, 100));
     console.log('Total keywords to check:', keywords?.length || 0);
 
-    keywords.forEach((keyword: any) => {
-      try {
-        const term = keyword.term;
-        const termLower = term.toLowerCase();
-        
-        // Escape special regex characters
-        const escapedTerm = termLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        
-        // Check if it's just punctuation or contains letters
-        const hasLetters = /[a-zA-Z]/.test(term);
-        
-        // Build regex pattern
-        let regex;
-        if (hasLetters) {
-          // Use word boundaries for words
-          regex = new RegExp(`\\b${escapedTerm}\\b`, 'gi');
-        } else {
-          // No word boundaries for pure punctuation
-          regex = new RegExp(escapedTerm, 'g');
-        }
-        
-        // Match against original text for case-insensitive search
-        const matches = text.match(regex);
-        
-        if (matches && matches.length > 0) {
-          const count = matches.length;
-          const penalty = keyword.weight * count;
-          score -= penalty;
-          foundIssues.push(`"${term}" found ${count}x (-${penalty} points)`);
+    // Process keywords safely
+    if (keywords && Array.isArray(keywords)) {
+      keywords.forEach((keyword: any) => {
+        try {
+          // Validate keyword structure
+          if (!keyword || !keyword.term || typeof keyword.term !== 'string') {
+            console.warn('Invalid keyword structure:', keyword);
+            return;
+          }
+
+          if (!keyword.weight || typeof keyword.weight !== 'number') {
+            console.warn('Invalid keyword weight:', keyword);
+            return;
+          }
+
+          const term = keyword.term;
+          const termLower = term.toLowerCase();
           
-          if (keyword.type === 'sensational') sensationalCount += count;
-          else if (keyword.type === 'biased') biasedCount += count;
-          else if (keyword.type === 'source') sourceCount += count;
+          // Skip empty terms
+          if (term.trim().length === 0) {
+            return;
+          }
           
-          console.log(`Matched keyword: "${term}" ${count} times, type: ${keyword.type}`);
+          // Escape special regex characters
+          const escapedTerm = termLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          
+          // Check if it's just punctuation or contains letters
+          const hasLetters = /[a-zA-Z]/.test(term);
+          
+          // Build regex pattern
+          let regex;
+          if (hasLetters) {
+            // Use word boundaries for words
+            regex = new RegExp(`\\b${escapedTerm}\\b`, 'gi');
+          } else {
+            // No word boundaries for pure punctuation
+            regex = new RegExp(escapedTerm, 'g');
+          }
+          
+          // Match against original text for case-insensitive search
+          const matches = text.match(regex);
+          
+          if (matches && matches.length > 0) {
+            const count = matches.length;
+            const penalty = Math.min(keyword.weight * count, 50); // Cap individual penalty at 50
+            score -= penalty;
+            foundIssues.push(`"${term}" found ${count}x (-${penalty} points)`);
+            
+            if (keyword.type === 'sensational') sensationalCount += count;
+            else if (keyword.type === 'biased') biasedCount += count;
+            else if (keyword.type === 'source') sourceCount += count;
+            
+            console.log(`Matched keyword: "${term}" ${count} times, type: ${keyword.type}`);
+          }
+        } catch (e) {
+          console.error('Error processing keyword:', keyword?.term || 'unknown', e);
+          // Continue processing other keywords
         }
-      } catch (e) {
-        console.error('Error processing keyword:', keyword.term, e);
-      }
-    });
+      });
+    }
 
     // Additional heuristics for better scoring
     const hasAllCaps = /[A-Z]{4,}/.test(text);
@@ -137,25 +179,33 @@ serve(async (req) => {
       sourceVerification
     };
 
-    // Check if user is authenticated
+    // Check if user is authenticated and save history
     const authHeader = req.headers.get('Authorization');
     if (authHeader) {
       try {
         const token = authHeader.replace('Bearer ', '');
         const { data: { user }, error: userError } = await supabase.auth.getUser(token);
 
-        if (!userError && user) {
+        if (!userError && user && user.id) {
           // Save to analysis history
           const snippet = text.substring(0, 200);
-          await supabase.from('analysis_history').insert({
-            user_id: user.id,
-            text_snippet: snippet,
-            trust_score: score,
-            analysis_details: result
-          });
+          const { error: insertError } = await supabase
+            .from('analysis_history')
+            .insert({
+              user_id: user.id,
+              text_snippet: snippet,
+              trust_score: score,
+              analysis_details: result
+            });
+          
+          if (insertError) {
+            console.error('Error saving analysis history:', insertError);
+            // Don't fail the request, just log the error
+          }
         }
       } catch (e) {
-        console.log('Auth error (non-fatal):', e);
+        console.error('Auth error (non-fatal):', e);
+        // Continue without saving history
       }
     }
 
@@ -166,8 +216,12 @@ serve(async (req) => {
 
   } catch (error) {
     console.error('Analysis error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return new Response(
-      JSON.stringify({ error: "An error occurred during analysis" }),
+      JSON.stringify({ 
+        error: "An error occurred during analysis",
+        details: errorMessage 
+      }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
