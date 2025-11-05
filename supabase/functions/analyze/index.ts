@@ -53,7 +53,11 @@ serve(async (req) => {
       const termLower = keyword.term.toLowerCase();
       // Handle special characters and multi-word terms
       const escapedTerm = termLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const regex = new RegExp(escapedTerm, 'gi');
+      // Use word boundaries for regular words, but not for punctuation
+      const isPunctuation = /^[^a-zA-Z0-9]+$/.test(keyword.term);
+      const regex = isPunctuation 
+        ? new RegExp(escapedTerm, 'gi')
+        : new RegExp(`\\b${escapedTerm}\\b`, 'gi');
       const matches = text.match(regex);
       
       if (matches) {

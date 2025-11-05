@@ -50,6 +50,9 @@ const Navbar = () => {
             <a href="#demo" className="text-foreground hover:text-primary transition-colors">
               Demo
             </a>
+            <Link to="/compare" className="text-foreground hover:text-primary transition-colors">
+              Compare
+            </Link>
             {user ? (
               <>
                 <Link to="/dashboard" className="text-foreground hover:text-primary transition-colors">
@@ -102,6 +105,9 @@ const Navbar = () => {
             <a href="#demo" className="text-foreground hover:text-primary transition-colors">
               Demo
             </a>
+            <Link to="/compare" className="text-foreground hover:text-primary transition-colors">
+              Compare
+            </Link>
             {user ? (
               <>
                 <Link to="/dashboard" className="text-foreground hover:text-primary transition-colors">
